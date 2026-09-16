@@ -64,7 +64,7 @@ func TestPutNilEntry(t *testing.T) {
 			assert.NotNil(t, ce, "Expected only non-nil CheckedEntries in pool.")
 			assert.False(t, ce.dirty, "Unexpected dirty bit set.")
 			assert.Nil(t, ce.ErrorOutput, "Non-nil ErrorOutput.")
-			assert.Equal(t, WriteThenNoop, ce.should, "Unexpected terminal behavior.")
+			assert.Nil(t, ce.after, "Unexpected terminal behavior.")
 			assert.Equal(t, 0, len(ce.cores), "Expected empty slice of cores.")
 			assert.True(t, cap(ce.cores) > 0, "Expected pooled CheckedEntries to pre-allocate slice of Cores.")
 		}
@@ -111,22 +111,118 @@ func TestCheckedEntryWrite(t *testing.T) {
 
 	t.Run("WriteThenPanic", func(t *testing.T) {
 		var ce *CheckedEntry
-		ce = ce.Should(Entry{}, WriteThenPanic)
+		ce = ce.After(Entry{}, WriteThenPanic)
 		assert.Panics(t, func() { ce.Write() }, "Expected to panic when WriteThenPanic is set.")
 	})
 
 	t.Run("WriteThenGoexit", func(t *testing.T) {
 		var ce *CheckedEntry
-		ce = ce.Should(Entry{}, WriteThenGoexit)
+		ce = ce.After(Entry{}, WriteThenGoexit)
 		assertGoexit(t, func() { ce.Write() })
 	})
 
 	t.Run("WriteThenFatal", func(t *testing.T) {
 		var ce *CheckedEntry
-		ce = ce.Should(Entry{}, WriteThenFatal)
+		ce = ce.After(Entry{}, WriteThenFatal)
 		stub := exit.WithStub(func() {
 			ce.Write()
 		})
 		assert.True(t, stub.Exited, "Expected to exit when WriteThenFatal is set.")
+		assert.Equal(t, 1, stub.Code, "Expected to exit when WriteThenFatal is set.")
 	})
+
+	t.Run("After", func(t *testing.T) {
+		var ce *CheckedEntry
+		hook := &customHook{}
+		ce = ce.After(Entry{}, hook)
+		ce.Write()
+		assert.True(t, hook.called, "Expected to call custom action after Write.")
+	})
+}
+
+type customHook struct {
+	called bool
+}
+
+func (c *customHook) OnWrite(_ *CheckedEntry, _ []Field) {
+	c.called = true
+}
+
+func TestCheckedEntryBefore(t *testing.T) {
+	t.Run("nil is safe", func(t *testing.T) {
+		var ce *CheckedEntry
+		ce = ce.Before(Entry{Message: "hello"}, func(ent Entry, fields []Field) (Entry, []Field) {
+			ent.Message = "modified"
+			return ent, fields
+		})
+		assert.NotNil(t, ce)
+		assert.Equal(t, "hello", ce.Message)
+	})
+
+	t.Run("modifies entry and fields", func(t *testing.T) {
+		core := &recordingCore{}
+		var ce *CheckedEntry
+		ce = ce.AddCore(Entry{Message: "original"}, core)
+		ce = ce.Before(Entry{}, func(ent Entry, fields []Field) (Entry, []Field) {
+			ent.Message = "modified"
+			fields = append(fields, Field{Key: "added", Type: StringType, String: "value"})
+			return ent, fields
+		})
+		ce.Write(Field{Key: "initial", Type: StringType, String: "v"})
+
+		assert.Equal(t, "modified", core.entry.Message)
+		assert.Len(t, core.fields, 2)
+		assert.Equal(t, "initial", core.fields[0].Key)
+		assert.Equal(t, "added", core.fields[1].Key)
+	})
+
+	t.Run("multiple hooks chain in order", func(t *testing.T) {
+		core := &recordingCore{}
+		var ce *CheckedEntry
+		ce = ce.AddCore(Entry{Message: "start"}, core)
+		ce = ce.Before(Entry{}, func(ent Entry, fields []Field) (Entry, []Field) {
+			ent.Message = ent.Message + "-first"
+			return ent, fields
+		})
+		ce = ce.Before(Entry{}, func(ent Entry, fields []Field) (Entry, []Field) {
+			ent.Message = ent.Message + "-second"
+			return ent, fields
+		})
+		ce.Write()
+
+		assert.Equal(t, "start-first-second", core.entry.Message)
+	})
+
+	t.Run("hooks reset on pool reuse", func(t *testing.T) {
+		core := &recordingCore{}
+		var ce *CheckedEntry
+		ce = ce.AddCore(Entry{Message: "first"}, core)
+		ce = ce.Before(Entry{}, func(ent Entry, fields []Field) (Entry, []Field) {
+			ent.Message = "hooked"
+			return ent, fields
+		})
+		ce.Write()
+		assert.Equal(t, "hooked", core.entry.Message)
+
+		// Get a new entry from the pool — hooks should be cleared.
+		ce2 := getCheckedEntry()
+		assert.Empty(t, ce2.before)
+		putCheckedEntry(ce2)
+	})
+}
+
+// recordingCore captures the last entry and fields written to it.
+type recordingCore struct {
+	entry  Entry
+	fields []Field
+}
+
+func (c *recordingCore) Enabled(Level) bool                              { return true }
+func (c *recordingCore) With([]Field) Core                               { return c }
+func (c *recordingCore) Check(ent Entry, ce *CheckedEntry) *CheckedEntry { return ce.AddCore(ent, c) }
+func (c *recordingCore) Sync() error                                     { return nil }
+func (c *recordingCore) Write(ent Entry, fields []Field) error {
+	c.entry = ent
+	c.fields = fields
+	return nil
 }

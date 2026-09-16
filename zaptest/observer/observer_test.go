@@ -1,4 +1,4 @@
-// Copyright (c) 2016 Uber Technologies, Inc.
+// Copyright (c) 2016-2022 Uber Technologies, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -29,6 +29,8 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	//revive:disable:dot-imports
 	. "go.uber.org/zap/zaptest/observer"
 )
 
@@ -40,6 +42,10 @@ func assertEmpty(t testing.TB, logs *ObservedLogs) {
 func TestObserver(t *testing.T) {
 	observer, logs := New(zap.InfoLevel)
 	assertEmpty(t, logs)
+
+	t.Run("LevelOf", func(t *testing.T) {
+		assert.Equal(t, zap.InfoLevel, zapcore.LevelOf(observer), "Observer reported the wrong log level.")
+	})
 
 	assert.NoError(t, observer.Sync(), "Unexpected failure in no-op Sync")
 
@@ -165,11 +171,15 @@ func TestFilters(t *testing.T) {
 			Entry:   zapcore.Entry{Level: zap.ErrorLevel, Message: "warp core breach"},
 			Context: []zapcore.Field{zap.Int("b", 42)},
 		},
+		{
+			Entry:   zapcore.Entry{Level: zap.ErrorLevel, Message: "msg", LoggerName: "my.logger"},
+			Context: []zapcore.Field{zap.Int("b", 42)},
+		},
 	}
 
 	logger, sink := New(zap.InfoLevel)
 	for _, log := range logs {
-		logger.Write(log.Entry, log.Context)
+		assert.NoError(t, logger.Write(log.Entry, log.Context), "Unexpected error writing log entry.")
 	}
 
 	tests := []struct {
@@ -244,6 +254,11 @@ func TestFilters(t *testing.T) {
 			msg:      "filter level",
 			filtered: sink.FilterLevelExact(zap.WarnLevel),
 			want:     logs[9:10],
+		},
+		{
+			msg:      "filter logger name",
+			filtered: sink.FilterLoggerName("my.logger"),
+			want:     logs[11:12],
 		},
 	}
 

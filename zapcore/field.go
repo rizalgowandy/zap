@@ -47,7 +47,7 @@ const (
 	ByteStringType
 	// Complex128Type indicates that the field carries a complex128.
 	Complex128Type
-	// Complex64Type indicates that the field carries a complex128.
+	// Complex64Type indicates that the field carries a complex64.
 	Complex64Type
 	// DurationType indicates that the field carries a time.Duration.
 	DurationType
@@ -219,7 +219,7 @@ func encodeStringer(key string, stringer interface{}, enc ObjectEncoder) (retErr
 			// If it's a nil pointer, just say "<nil>". The likeliest causes are a
 			// Stringer that fails to guard against nil or a nil pointer for a
 			// value receiver, and in either case, "<nil>" is a nice result.
-			if v := reflect.ValueOf(stringer); v.Kind() == reflect.Ptr && v.IsNil() {
+			if v := reflect.ValueOf(stringer); v.Kind() == reflect.Pointer && v.IsNil() {
 				enc.AddString(key, "<nil>")
 				return
 			}
